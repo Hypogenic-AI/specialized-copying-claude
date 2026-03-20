@@ -1,0 +1,25 @@
+PDF: papers/1901.02860_knn_lm.pdf
+Total pages: 20
+Pages per chunk: 1
+
+Chunks:
+  1901.02860_knn_lm_chunk_001.pdf: page 1
+  1901.02860_knn_lm_chunk_002.pdf: page 2
+  1901.02860_knn_lm_chunk_003.pdf: page 3
+  1901.02860_knn_lm_chunk_004.pdf: page 4
+  1901.02860_knn_lm_chunk_005.pdf: page 5
+  1901.02860_knn_lm_chunk_006.pdf: page 6
+  1901.02860_knn_lm_chunk_007.pdf: page 7
+  1901.02860_knn_lm_chunk_008.pdf: page 8
+  1901.02860_knn_lm_chunk_009.pdf: page 9
+  1901.02860_knn_lm_chunk_010.pdf: page 10
+  1901.02860_knn_lm_chunk_011.pdf: page 11
+  1901.02860_knn_lm_chunk_012.pdf: page 12
+  1901.02860_knn_lm_chunk_013.pdf: page 13
+  1901.02860_knn_lm_chunk_014.pdf: page 14
+  1901.02860_knn_lm_chunk_015.pdf: page 15
+  1901.02860_knn_lm_chunk_016.pdf: page 16
+  1901.02860_knn_lm_chunk_017.pdf: page 17
+  1901.02860_knn_lm_chunk_018.pdf: page 18
+  1901.02860_knn_lm_chunk_019.pdf: page 19
+  1901.02860_knn_lm_chunk_020.pdf: page 20

@@ -1,0 +1,23 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\para{Specialization helps accuracy, not calibration.} Our central finding is that a model trained exclusively for copy decisions does not produce better-calibrated probabilities than a joint pointer-generator---but it does produce dramatically more accurate ones. The 52\% reduction in error rate (F1: 0.985 vs.\ 0.969) and 46\% improvement in Brier score are practically significant. The Brier score decomposition is informative: since calibration is comparable, the entire Brier advantage comes from better \emph{refinement}---the specialized model's predictions are sharper and more often correct.
+
+\para{Generation loss as implicit calibration regularizer.} We hypothesize that training on the harder generation task prevents the copy decision head from becoming overconfident. The generation loss introduces gradient signal from a broad vocabulary distribution, which may smooth the copy probability landscape. This interpretation is supported by the model size ablation: at medium scale, the joint model's ECE (0.0053) is substantially better than the specialized model's (0.0092), suggesting the regularizing effect strengthens with capacity. This finding has practical implications---it suggests that calibration of auxiliary predictions may benefit from joint training even when accuracy does not.
+
+\para{MCE tells a different story than ECE.} While average calibration (ECE) is similar, the joint model has notably worse worst-case calibration (MCE: 0.332 vs.\ 0.214) with higher variance. This means the joint model has ``miscalibrated pockets'' in probability space where predictions are substantially off. For safety-critical applications where worst-case behavior matters, the specialized model's more consistent calibration profile may be preferable despite its slightly higher average ECE.
+
+\para{Temperature scaling is unnecessary.} The optimal temperatures found (1.03--1.11) are close to 1.0, confirming that both models produce well-calibrated logits without post-hoc correction. This contrasts with the findings of \citet{guo2017calibration}, who reported substantial miscalibration in deep networks. The difference likely stems from our task's simplicity and our models' small size---both factors that \citet{guo2017calibration} identified as promoting better calibration.
+
+\subsection{Limitations}
+\label{sec:limitations}
+
+\para{Synthetic data.} Our copy decision rule, while multi-factorial, is simpler than real-world copy patterns in natural language. Real summarization involves complex semantic judgments about when to copy names, numbers, and phrases versus paraphrase. Our results establish the phenomenon in a controlled setting but do not guarantee transfer to natural language tasks.
+
+\para{Shared encoder.} The specialized model uses frozen representations from the joint model's encoder. In practice, one might train a separate encoder for the copy task, which could change the calibration dynamics. Our design isolates the effect of \emph{decision specialization} from \emph{representation specialization}.
+
+\para{Small scale.} Our models range from 69K to 5.7M parameters, far smaller than production copy mechanisms embedded in models with 100M+ parameters. The interaction between model size and calibration observed in our ablation suggests that results may differ at larger scales.
+
+\para{Single task structure.} We test one synthetic task with one copy ratio ($\sim$46.5\%). Different copy patterns---more context-dependent rules, very high or very low copy ratios---might yield different calibration dynamics.
+
+\para{No real-world validation.} We did not evaluate on CNN/Daily Mail or other summarization benchmarks due to the difficulty of obtaining ground-truth copy labels in natural language. Developing methods to extract approximate copy labels from real data is an important direction for future work.

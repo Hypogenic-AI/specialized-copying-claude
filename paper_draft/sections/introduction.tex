@@ -1,0 +1,20 @@
+\section{Introduction}
+\label{sec:intro}
+
+When a summarization model copies ``United Nations'' from a source document, how confident should it be that copying is the right choice? Copy mechanisms~\cite{vinyals2015pointer,gu2016copynet,see2017get} are central to modern sequence-to-sequence models, yet we know surprisingly little about the \emph{quality} of their copy-or-generate probability estimates. A poorly calibrated copy gate might assign 90\% probability to copying when the true frequency of correct copies at that confidence level is only 60\%---leading downstream systems to make suboptimal decisions.
+
+{\bf Why does calibration of copy decisions matter?} In pointer-generator networks~\cite{see2017get}, the generation probability $\pgen$ acts as a soft switch between copying from the source and generating from the vocabulary. This probability is used directly in the final output distribution, so its accuracy affects every generated token. If $\pgen$ is miscalibrated, the model systematically over- or under-copies, degrading output quality in ways that task-level metrics like ROUGE may not fully capture.
+
+{\bf What do we know about copy decision quality?} Prior work on copy mechanisms evaluates task-level metrics---ROUGE for summarization~\cite{see2017get}, perplexity for language modeling~\cite{merity2016pointer}---but never directly measures whether the copy probability itself is well-calibrated. Meanwhile, \citet{guo2017calibration} showed that modern neural networks are often poorly calibrated, with overconfident predictions. This raises a natural question: are the copy decisions embedded within large joint models also miscalibrated?
+
+{\bf Our approach.} We directly test whether a small Transformer trained exclusively for copy decisions produces better-calibrated probability estimates than a joint pointer-generator. We design a synthetic copy task with known ground-truth copy labels, enabling precise calibration measurement. We train a joint pointer-generator model (824K parameters) end-to-end, then train a specialized copy-decision model (472K parameters) on the same encoder representations, predicting only copy decisions. We compare their calibration using expected calibration error (ECE), Brier score, and reliability diagrams across five random seeds.
+
+{\bf What do we find?} Our results reveal a nuanced answer. Both models achieve excellent calibration (ECE $< 0.01$), with no statistically significant difference ($p = 0.27$). However, specialization dramatically improves copy decision \emph{accuracy}: the specialized model achieves F1 of 0.985 versus 0.969 for the joint model---a 52\% reduction in error rate---and a 46\% better Brier score (0.013 vs.\ 0.024). The benefit of specialization lies in sharper, more accurate predictions, not in calibration per se. A model size ablation reveals an interaction: the joint model's generation loss appears to act as an implicit calibration regularizer, an effect that strengthens with model capacity.
+
+We make the following contributions:
+\begin{itemize}[leftmargin=*,itemsep=0pt,topsep=0pt]
+    \item We introduce calibration analysis to copy mechanisms, measuring ECE, Brier score, and reliability diagrams for copy-or-generate probability estimates for the first time.
+    \item We design and evaluate a specialized copy-decision architecture that achieves a 52\% reduction in copy decision error rate (F1: 0.985 vs.\ 0.969) compared to a standard pointer-generator.
+    \item We identify an implicit calibration regularization effect from joint generation training, where the harder generation task naturally produces well-calibrated copy probabilities.
+    \item We conduct ablations across model sizes and post-hoc calibration methods, finding that temperature scaling provides negligible benefit when models are already well-calibrated.
+\end{itemize}

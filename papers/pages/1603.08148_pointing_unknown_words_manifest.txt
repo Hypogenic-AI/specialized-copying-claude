@@ -1,0 +1,15 @@
+PDF: papers/1603.08148_pointing_unknown_words.pdf
+Total pages: 10
+Pages per chunk: 1
+
+Chunks:
+  1603.08148_pointing_unknown_words_chunk_001.pdf: page 1
+  1603.08148_pointing_unknown_words_chunk_002.pdf: page 2
+  1603.08148_pointing_unknown_words_chunk_003.pdf: page 3
+  1603.08148_pointing_unknown_words_chunk_004.pdf: page 4
+  1603.08148_pointing_unknown_words_chunk_005.pdf: page 5
+  1603.08148_pointing_unknown_words_chunk_006.pdf: page 6
+  1603.08148_pointing_unknown_words_chunk_007.pdf: page 7
+  1603.08148_pointing_unknown_words_chunk_008.pdf: page 8
+  1603.08148_pointing_unknown_words_chunk_009.pdf: page 9
+  1603.08148_pointing_unknown_words_chunk_010.pdf: page 10

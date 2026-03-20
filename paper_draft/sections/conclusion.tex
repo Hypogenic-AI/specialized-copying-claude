@@ -1,0 +1,8 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+We introduced calibration analysis to copy mechanisms, asking whether a specialized copy-decision model produces better-calibrated probabilities than a joint pointer-generator. Using a synthetic task with ground-truth copy labels, we find that both models are well-calibrated (ECE $< 0.01$), with no significant difference between them. However, specialization produces substantially more accurate copy decisions (F1: 0.985 vs.\ 0.969) and better Brier scores (0.013 vs.\ 0.024). The practical takeaway is clear: if you need reliable copy decisions, train a specialized model---the accuracy gains are large even though calibration is comparable.
+
+Our most surprising finding is that joint generation training appears to implicitly regularize calibration, an effect that strengthens with model capacity. This suggests a broader principle: auxiliary tasks that are harder than the target decision may improve calibration of that decision even when they do not share a direct training signal.
+
+Future work should validate these findings on real-world copy tasks such as CNN/Daily Mail summarization, explore end-to-end specialized models with their own encoders, and test whether the implicit calibration regularization effect holds at the scale of modern pre-trained models like BART and T5.

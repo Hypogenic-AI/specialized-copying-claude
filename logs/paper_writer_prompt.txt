@@ -1,0 +1,785 @@
+You are an academic paper writer. Generate a complete NEURIPS style paper
+based on the experiment results provided.
+
+════════════════════════════════════════════════════════════════════════════════
+                         IMPORTANT: BEFORE YOU START
+════════════════════════════════════════════════════════════════════════════════
+
+Before writing any content, you MUST complete these steps:
+
+1. READ THE SKILL: Review the paper-writer skill at .claude/skills/paper-writer/SKILL.md
+2. READ THE STYLE GUIDE: Study templates/paper_writing/lab_style_guide.md carefully
+3. REVIEW EXAMPLES: Browse paper_examples/ for formatting and language patterns:
+   - Look at sections/1.introduction.tex for language style
+   - Look at tables/*.tex for table formatting
+   - Look at commands/*.tex for macro usage
+4. VERIFY COMMAND TEMPLATES: Command templates (math.tex, general.tex, macros.tex) are pre-copied to paper_draft/commands/
+
+CRITICAL: Reference example papers for FORMATTING and LANGUAGE STYLE only.
+Do NOT copy content, phrasing, or narrative structure from the example papers.
+The examples are in a different research domain - focus only on presentation style.
+
+════════════════════════════════════════════════════════════════════════════════
+                            EXPERIMENT REPORT
+════════════════════════════════════════════════════════════════════════════════
+
+# Research Report: Is Copying More Calibrated if It&#39;s Specialized?
+
+## 1. Executive Summary
+
+We tested whether a small Transformer trained specifically for copy decisions produces better-calibrated copy probabilities than a joint pointer-generator model that learns generation and copy decisions simultaneously. **Our results show a nuanced answer**: both models achieve remarkably low calibration error (ECE &lt; 0.01), with no statistically significant difference in ECE (p=0.27). However, the specialized model dramatically outperforms the joint model in copy decision **accuracy** (F1: 0.985 vs 0.969) and **Brier score** (0.013 vs 0.024), meaning specialization primarily improves the sharpness and accuracy of copy predictions rather than their calibration per se. The practical implication is that specialization yields more reliable copy decisions overall, even though both approaches produce well-calibrated probability estimates.
+
+## 2. Goal
+
+**Hypothesis**: Training a small Transformer specifically to decide when to copy and from where will result in more accurate copying decisions than using a general language model trained for the same task.
+
+**Why this matters**: Copy mechanisms are fundamental to NLP tasks like summarization, dialogue, and code generation. Models must decide when to copy from input vs. generate from vocabulary. If these decisions are poorly calibrated or inaccurate, downstream systems make suboptimal choices. Understanding whether task specialization improves copy decision quality has implications for NLP system design.
+
+**Gap in existing work**: No prior work measures the calibration of copy decisions. All existing copy mechanisms (Pointer-Generator, CopyNet, Pointer Sentinel) embed the copy decision within the full generation model. The question of whether a separately trained, specialized copy-decision model would perform better has not been explored.
+
+## 3. Data Construction
+
+### Dataset Description
+We used a **synthetic copy task** with controllable ground-truth copy labels, enabling precise measurement of calibration without the noise of real-world data.
+
+- **Source**: Synthetically generated
+- **Size**: 10,000 train / 2,000 validation / 2,000 test sequences
+- **Vocabulary**: 500 tokens
+- **Source length**: 40 tokens, **Target length**: 20 tokens
+- **Copy ratio**: ~46.5% of target tokens are copies (empirical mean across test sets)
+
+### Copy Decision Rule
+The probability of copying at each output position depends on three factors:
+1. **Token type** (tokens 0-249 are &#34;entity-like&#34;, 70% copy tendency vs 30%)
+2. **Position** (edges of input have 60% copy tendency vs 40%)
+3. **Local repetition** (repeated nearby tokens increase copy tendency)
+
+Plus Gaussian noise (σ=0.1) for realistic difficulty. This creates a learnable but non-trivial decision boundary.
+
+### Example Samples
+| Output Position | Source Token ID | Token Type | Position Region | Copy? |
+|:-:|:-:|:-:|:-:|:-:|
+| 3 | 142 | Entity-like | Edge | Yes (copied from src pos 6) |
+| 7 | 387 | Function-like | Middle | No (generated token 201) |
+| 12 | 88 | Entity-like | Middle | Yes (copied from src pos 24) |
+
+### Data Quality
+- No missing values (fully synthetic)
+- Balanced copy/generate split (~46.5% copy, ~53.5% generate)
+- Reproducible via random seed
+
+### Train/Val/Test Splits
+- Random generation with different seeds per split
+- No overlap between splits (independent generation)
+- 10K/2K/2K split (5:1:1 ratio)
+
+## 4. Experiment Description
+
+### Methodology
+
+#### High-Level Approach
+We train two models on the same synthetic copy task:
+1. **Joint Pointer-Generator**: A small Transformer encoder-decoder with a pointer-generator mechanism. It learns to generate tokens AND make copy decisions simultaneously. The p_gen gate (following See et al., 2017) serves as the copy probability.
+2. **Specialized Copy-Decider**: A small Transformer that takes encoder/decoder representations from the trained joint model and predicts ONLY copy decisions (binary copy/generate + pointer distribution).
+
+We then compare the calibration and accuracy of their copy probability estimates.
+
+#### Why This Method?
+- **Synthetic data** gives us ground-truth copy labels, enabling precise calibration measurement
+- **Shared encoder representations** isolates the effect of specialization (both models see the same features)
+- **Multiple seeds** ensures results are robust
+- **Temperature scaling baseline** tests whether any calibration gap is easily correctable
+
+### Implementation Details
+
+#### Tools and Libraries
+| Library | Version |
+|---------|---------|
+| Python | 3.12.8 |
+| PyTorch | 2.10.0+cu128 |
+| NumPy | 2.4.3 |
+| SciPy | 1.15.3 |
+| matplotlib | 3.10.3 |
+
+#### Hardware
+- GPU: NVIDIA RTX A6000 (49GB VRAM)
+- Training device: single GPU (CUDA)
+
+#### Model Architectures
+
+**Joint Pointer-Generator** (824K parameters):
+- Embedding: 500 tokens -&gt; d=128
+- Positional encoding (sinusoidal)
+- Transformer encoder: 2 layers, 4 heads, d_ff=256
+- Transformer decoder: 2 layers, 4 heads, d_ff=256
+- Generation head: linear(128, 500)
+- p_gen gate: linear(384, 1) with sigmoid (from concatenated decoder state, context, input embedding)
+- Pointer attention: query/key projections from decoder/encoder
+
+**Specialized Copy-Decider** (472K parameters):
+- Input projections for encoder/decoder representations
+- 2 Transformer decoder layers (cross-attending to encoder)
+- Copy decision head: MLP(128 -&gt; 64 -&gt; 1) with sigmoid
+- Pointer attention: query/key projections
+
+#### Hyperparameters
+| Parameter | Value | Selection Method |
+|-----------|-------|------------------|
+| d_model | 128 | Literature-guided |
+| n_heads | 4 | Standard for d=128 |
+| n_layers | 2 | Small model design |
+| d_ff | 256 | 2x d_model |
+| dropout | 0.1 | Default |
+| batch_size | 128 | GPU memory |
+| learning_rate | 3e-4 | Adam default |
+| epochs | 30 | Convergence monitoring |
+| optimizer | AdamW | Standard |
+| scheduler | CosineAnnealing | Smooth decay |
+| grad_clip | 1.0 | Stability |
+
+#### Training Procedure
+1. Train joint model end-to-end on generation + copy + pointer losses
+2. Extract encoder/decoder representations from trained joint model
+3. Train specialized model on frozen representations (copy + pointer losses only)
+4. Evaluate both on held-out test set
+
+### Experimental Protocol
+
+#### Reproducibility Information
+- **Number of runs**: 5 (seeds: 42, 123, 456, 789, 1024)
+- **Random seeds**: Set for Python, NumPy, PyTorch, CUDA
+- **Execution time**: ~2 minutes per seed, ~15 minutes total including ablation
+
+#### Evaluation Metrics
+- **ECE (Expected Calibration Error)**: Average gap between predicted probability and observed frequency across 15 bins. Lower is better. Primary calibration metric.
+- **MCE (Maximum Calibration Error)**: Worst-case bin calibration gap. Lower is better.
+- **Brier Score**: Mean squared error of probability estimates. Decomposes into calibration + refinement. Lower is better.
+- **Accuracy/F1**: Binary classification accuracy and F1 for copy decision at threshold 0.5.
+
+### Raw Results
+
+#### Main Results (5 seeds, mean ± std)
+
+| Model | ECE | MCE | Brier | Accuracy | F1 |
+|-------|:---:|:---:|:-----:|:--------:|:--:|
+| Joint | 0.0065±0.0017 | 0.332±0.173 | 0.0239±0.0021 | 0.970±0.004 | 0.969±0.004 |
+| Specialized | 0.0078±0.0012 | 0.214±0.068 | **0.0128±0.0012** | **0.986±0.001** | **0.985±0.001** |
+| Temp-Scaled | **0.0063±0.0021** | 0.311±0.129 | 0.0238±0.0020 | 0.970±0.004 | 0.969±0.004 |
+
+#### Model Size Ablation (single seed=42)
+
+| Size | Joint ECE | Spec ECE | Joint F1 | Spec F1 | Joint Params | Spec Params |
+|------|:---------:|:--------:|:--------:|:-------:|:------------:|:-----------:|
+| Tiny (1L, d=64) | 0.0192 | 0.0179 | 0.918 | 0.968 | 157K | 69K |
+| Small (2L, d=128) | 0.0106 | 0.0100 | 0.957 | 0.982 | 824K | 472K |
+| Medium (4L, d=256) | 0.0053 | 0.0092 | 0.979 | 0.983 | 5.7M | 3.5M |
+
+#### Statistical Tests
+
+| Comparison | t-statistic | p-value | Significant (α=0.05)? |
+|------------|:-----------:|:-------:|:---------------------:|
+| Joint vs Specialized (ECE) | -1.27 | 0.272 | No |
+| Temp-Scaled vs Specialized (ECE) | -1.01 | 0.371 | No |
+| Cohen&#39;s d (Joint vs Spec ECE) | -0.64 | — | Medium effect |
+
+#### Output Locations
+- Full results: `results/all_results.json`
+- Reliability diagrams: `results/plots/reliability_diagrams.png`
+- Combined comparison: `results/plots/combined_reliability.png`
+- Metric comparison bars: `results/plots/metric_comparison.png`
+- Size ablation: `results/plots/size_ablation.png`
+
+## 5. Result Analysis
+
+### Key Findings
+
+**Finding 1: Both models are well-calibrated, with no significant calibration difference.**
+The joint model (ECE=0.0065) and specialized model (ECE=0.0078) both achieve excellent calibration. The difference is not statistically significant (p=0.27). The reliability diagrams show both models track the diagonal closely.
+
+**Finding 2: The specialized model is dramatically more accurate at copy decisions.**
+The specialized model achieves F1=0.985 vs 0.969 for the joint model — a 52% reduction in error rate. This is the clearest advantage of specialization.
+
+**Finding 3: The specialized model has a substantially better Brier score.**
+Brier score (0.0128 vs 0.0239) favors the specialized model by ~46%. Since the Brier score decomposes into calibration + sharpness, and calibration is similar, the advantage comes from *sharpness* — the specialized model produces more confident AND more correct predictions.
+
+**Finding 4: Temperature scaling provides minimal benefit.**
+The optimal temperature was consistently near 1.0 (range: 1.03-1.11), confirming both models are already well-calibrated. Temperature scaling marginally improves the joint model&#39;s ECE but doesn&#39;t affect accuracy.
+
+**Finding 5: The specialized model has lower worst-case calibration error (MCE).**
+MCE is 0.214 for specialized vs 0.332 for joint. The joint model has higher variance in MCE (std=0.173 vs 0.068), suggesting it occasionally produces very poorly calibrated bins, while the specialized model is more consistently calibrated.
+
+**Finding 6: Size ablation reveals an interaction effect.**
+At tiny size, specialized has slightly better ECE. At medium size, the joint model has better ECE. This suggests that as model capacity increases, the joint model&#39;s calibration benefits from the regularizing effect of the generation task, while the specialized model may overfit slightly to the copy decision.
+
+### Hypothesis Testing Results
+
+- **H1 (Specialized has lower ECE)**: **Not supported.** ECE difference is not significant (p=0.27). Both models are well-calibrated.
+- **H2 (Specialized reliability diagram closer to diagonal)**: **Mixed.** Both are close. Specialized has lower MCE but slightly higher ECE.
+- **H3 (Temperature scaling partially closes gap)**: **Not applicable** — there is no calibration gap to close.
+- **H4 (Calibration advantage holds across sizes)**: **Not supported.** At larger sizes, the joint model is actually better calibrated.
+
+### Surprises and Insights
+
+1. **The joint model&#39;s generation loss acts as an implicit regularizer for calibration.** Training on the harder generation task may prevent the copy decision head from becoming overconfident, naturally producing well-calibrated probabilities.
+
+2. **Specialization helps accuracy far more than calibration.** The 52% error reduction in F1 is striking. By focusing all capacity on copy decisions, the specialized model learns a much sharper decision boundary.
+
+3. **The Brier score decomposition tells the real story.** Equal calibration + much better accuracy = much better Brier score. This means specialization improves the *quality* of copy decisions even though it doesn&#39;t improve their *calibration*.
+
+4. **MCE vs ECE tells different stories.** The specialized model has better worst-case calibration despite slightly worse average calibration. This suggests the joint model has a few &#34;miscalibrated pockets&#34; in probability space.
+
+### Limitations
+
+1. **Synthetic data**: The copy decision rule is simpler than real-world copying patterns. Results may not transfer to natural language tasks.
+2. **Shared encoder**: The specialized model uses representations from the joint model&#39;s encoder. In practice, one might train a separate encoder, which could change the dynamics.
+3. **Small scale**: Models are very small (472K-824K params). Larger models common in practice (100M+) might show different calibration behavior.
+4. **Single task**: Only one synthetic task structure was tested. Different copy patterns (more/less structured, different copy ratios) might yield different results.
+5. **No real-world validation**: We did not validate on CNN/Daily Mail or other real summarization datasets due to the computational cost of training full pointer-generators from scratch.
+
+## 6. Conclusions
+
+### Summary
+Training a specialized small Transformer for copy decisions does **not** produce better-calibrated probability estimates than a joint pointer-generator model — both achieve excellent calibration (ECE &lt; 0.01). However, specialization produces **dramatically more accurate** copy decisions (F1: 0.985 vs 0.969, 52% error reduction) and better overall probabilistic predictions (Brier: 0.013 vs 0.024). The benefit of specialization lies in decision accuracy and sharpness, not calibration per se.
+
+### Implications
+- **For practitioners**: If you need a reliable copy decision, train a specialized model. You get much better accuracy with naturally good calibration.
+- **For the calibration literature**: Joint training on a harder task (generation) appears to implicitly regularize calibration, matching or exceeding a specialized model.
+- **For architecture design**: The copy decision module should be separate from the generator for accuracy, but does not need special calibration treatment.
+
+### Confidence in Findings
+**Moderate-to-high** for the calibration finding (no significant difference), supported by 5 seeds and consistent results. **High** for the accuracy finding (large, consistent F1 gap across all seeds). The synthetic setting provides clean measurements but limits generalizability.
+
+## 7. Next Steps
+
+### Immediate Follow-ups
+1. **Real-world validation**: Train pointer-generator and specialized copy-decider on CNN/Daily Mail to verify findings transfer to natural language.
+2. **Independent encoder**: Train the specialized model with its own encoder (not shared) to test whether end-to-end specialization changes calibration dynamics.
+3. **Harder copy tasks**: Create synthetic tasks with more complex, context-dependent copy rules to test calibration under greater difficulty.
+
+### Alternative Approaches
+- Test with modern pre-trained models (BART, T5) as the base, extracting copy decisions from cross-attention patterns
+- Compare against CopyNet&#39;s shared softmax approach
+- Use focal loss for the specialized model to further improve calibration
+
+### Open Questions
+1. Does the implicit calibration regularization from generation training hold at larger scale?
+2. Would a specialized model trained end-to-end (with its own encoder) show better or worse calibration?
+3. How does the copy ratio affect the calibration dynamics? (Very low or very high copy ratios may change the picture.)
+4. Can the specialized model&#39;s accuracy advantage be combined with the joint model&#39;s calibration advantage?
+
+## References
+
+1. Vinyals, O., Fortunato, M., &amp; Jaitly, N. (2015). Pointer Networks. *NeurIPS*.
+2. Gu, J., Lu, Z., Li, H., &amp; Li, V. O. (2016). Incorporating Copying Mechanism in Sequence-to-Sequence Learning. *ACL*.
+3. See, A., Liu, P. J., &amp; Manning, C. D. (2017). Get To The Point: Summarization with Pointer-Generator Networks. *ACL*.
+4. Merity, S., Xiong, C., Bradbury, J., &amp; Socher, R. (2016). Pointer Sentinel Mixture Models. *ICLR*.
+5. Gulcehre, C., Ahn, S., Nallapati, R., Zhou, B., &amp; Bengio, Y. (2016). Pointing the Unknown Words. *ACL*.
+6. Guo, C., Pleiss, G., Sun, Y., &amp; Weinberger, K. Q. (2017). On Calibration of Modern Neural Networks. *ICML*.
+7. Vaswani, A., et al. (2017). Attention Is All You Need. *NeurIPS*.
+
+
+════════════════════════════════════════════════════════════════════════════════
+                            RESEARCH PLAN
+════════════════════════════════════════════════════════════════════════════════
+
+# Research Plan: Is Copying More Calibrated if It&#39;s Specialized?
+
+## Motivation &amp; Novelty Assessment
+
+### Why This Research Matters
+Copy mechanisms are fundamental to modern NLP (summarization, dialogue, code generation). Models must decide *when* to copy from input vs. generate from vocabulary. If these copy probability estimates are poorly calibrated, downstream systems make suboptimal decisions. Understanding whether specialization improves calibration has practical implications for building more reliable NLP systems.
+
+### Gap in Existing Work
+Per the literature review, **no existing work measures calibration of copy decisions**. Papers report ROUGE, perplexity, and accuracy, but never evaluate whether the copy/generate probability (p_gen) is well-calibrated. Furthermore, all existing copy mechanisms are embedded within larger models sharing representations — no work has explored a separately trained, specialized copy-decision model.
+
+### Our Novel Contribution
+We directly test whether a small Transformer trained exclusively for copy decisions produces better-calibrated copy probabilities than an equivalent joint model. We introduce calibration metrics (ECE, Brier score, reliability diagrams) to the copy mechanism literature for the first time.
+
+### Experiment Justification
+- **Experiment 1 (Synthetic Copy Task)**: Controlled environment with known ground-truth copy decisions. Allows precise calibration measurement without confounds from noisy real-world labels. This is the most rigorous test of the hypothesis.
+- **Experiment 2 (Model Size Ablation)**: Tests whether calibration advantage scales with model size, isolating the effect of specialization from capacity.
+- **Experiment 3 (Temperature Scaling Baseline)**: Tests whether simple post-hoc calibration of the joint model eliminates any advantage, establishing whether the benefit is fundamental or easily correctable.
+
+## Research Question
+Does a small Transformer trained specifically to decide when to copy and from where produce more calibrated (well-calibrated probability estimates) copy decisions than a general Transformer trained jointly for generation and copying?
+
+## Hypothesis Decomposition
+1. **H1**: The specialized copy-decision model has lower ECE than the joint pointer-generator model.
+2. **H2**: The specialized model&#39;s reliability diagram is closer to the diagonal (perfect calibration).
+3. **H3**: Post-hoc temperature scaling of the joint model partially but not fully closes the calibration gap.
+4. **H4**: The calibration advantage holds across different model sizes.
+
+## Proposed Methodology
+
+### Approach
+We create a synthetic sequence-to-sequence task with known ground-truth copy labels. We train two architectures on this task:
+- **Joint Model**: Small Transformer with pointer-generator mechanism (learns generation + copy decisions simultaneously)
+- **Specialized Model**: Small Transformer that takes encoder representations and predicts only copy decisions (binary copy/generate + pointer distribution)
+
+Both models share the same encoder. The joint model is trained end-to-end. The specialized model is trained only on the copy decision loss, using encoder representations from the joint model.
+
+### Experimental Steps
+1. Generate synthetic copy dataset (10K train, 2K val, 2K test sequences)
+2. Train joint pointer-generator model (small Transformer, 2 layers, d=128)
+3. Extract encoder representations from trained joint model
+4. Train specialized copy-decision model on same representations
+5. Evaluate calibration of both models&#39; copy probabilities
+6. Apply temperature scaling to joint model as baseline
+7. Ablate model sizes (1, 2, 4 layers)
+
+### Baselines
+1. **Joint Pointer-Generator**: Standard approach (See et al., 2017 adapted to Transformer)
+2. **Temperature-Scaled Joint Model**: Post-hoc calibration of the joint model&#39;s p_gen
+3. **Random Baseline**: Uniform random copy probabilities (calibration floor)
+
+### Evaluation Metrics
+- **ECE (Expected Calibration Error)**: Primary metric. Measures average gap between predicted probability and observed frequency.
+- **Brier Score**: Proper scoring rule combining calibration and refinement.
+- **Copy Decision F1**: Accuracy of binary copy/generate decision.
+- **Reliability Diagrams**: Visual assessment of calibration.
+- **MCE (Maximum Calibration Error)**: Worst-case calibration.
+
+### Statistical Analysis Plan
+- Run each experiment with 5 random seeds
+- Report mean ± std for all metrics
+- Paired t-test comparing ECE of specialized vs. joint model (α = 0.05)
+- Bootstrap confidence intervals for ECE differences
+
+## Expected Outcomes
+- **Supporting hypothesis**: Specialized model has ECE &lt; 0.05, joint model has ECE &gt; 0.10. Temperature scaling helps but doesn&#39;t fully close the gap.
+- **Refuting hypothesis**: Both models have similar ECE, or temperature scaling eliminates any difference.
+
+## Timeline and Milestones
+1. Data generation + environment setup: 15 min
+2. Joint model implementation + training: 30 min
+3. Specialized model implementation + training: 30 min
+4. Evaluation + calibration analysis: 20 min
+5. Ablation experiments: 30 min
+6. Documentation + report: 30 min
+
+## Potential Challenges
+- Synthetic task may not capture real-world complexity → mitigate by designing realistic copy patterns
+- Models may converge poorly → use learning rate warmup and careful hyperparameter selection
+- Small model capacity may limit both models equally → test multiple sizes
+
+## Success Criteria
+1. Clear, statistically significant difference in ECE between models (p &lt; 0.05)
+2. Reliability diagrams show visible calibration difference
+3. Results are reproducible across random seeds
+
+
+════════════════════════════════════════════════════════════════════════════════
+                          LITERATURE REVIEW
+════════════════════════════════════════════════════════════════════════════════
+
+# Literature Review: Is Copying More Calibrated if It&#39;s Specialized?
+
+## Research Area Overview
+
+This research investigates whether training a small, specialized Transformer model to make copying decisions (when to copy and from where) leads to more accurate (calibrated) copying than relying on a general-purpose language model. The work sits at the intersection of **copy mechanisms in neural sequence models**, **model calibration**, and **task-specific vs. general model architectures**.
+
+Copy mechanisms are fundamental to many NLP tasks where output sequences need to reproduce portions of the input (summarization, dialogue, question answering, code generation). The core question is: does a dedicated, smaller model that focuses exclusively on the copy-or-generate decision produce better-calibrated probability estimates than a large general model that handles copying as part of its overall generation process?
+
+---
+
+## Key Papers
+
+### 1. Pointer Networks (Vinyals et al., 2015)
+- **arXiv**: 1506.03134
+- **Key Contribution**: Introduced the concept of using attention as a pointer to select elements from the input sequence. Unlike standard seq2seq with fixed output vocabulary, Ptr-Net uses softmax over attention scores to point at input positions.
+- **Methodology**: Encoder-decoder LSTM. Attention scores u_j = v^T tanh(W1*e_j + W2*d_i) are used directly as output distribution via softmax, rather than being blended into a context vector.
+- **Datasets**: Synthetic geometric problems (convex hull, Delaunay triangulation, TSP)
+- **Results**: Outperforms seq2seq and seq2seq+attention on convex hull (72.6% vs 38.9% accuracy at n=50). Generalizes to longer sequences than seen in training.
+- **Relevance**: Foundational architecture for pointing/copying. Shows that a dedicated pointing mechanism outperforms general attention. Directly supports the hypothesis that specialized architectures for selection tasks are more effective.
+
+### 2. CopyNet (Gu et al., 2016)
+- **arXiv**: 1603.06393
+- **Key Contribution**: Introduced a unified model with **generate-mode** and **copy-mode** that share a single normalization term (softmax). The two modes compete naturally.
+- **Methodology**:
+  - Generate-mode: standard vocabulary softmax
+  - Copy-mode: score function ψ_c(x_j) = σ(h_j^T W_c) s_t using encoder hidden states
+  - Shared normalization Z across both modes
+  - **Selective read**: location-specific hidden state used for state updates during copying
+  - **Hybrid addressing**: content-based (attentive read) + location-based (selective read)
+- **Datasets**: Synthetic pattern tasks, LCSTS (Chinese summarization, 2.4M pairs), dialogue
+- **Results**:
+  - Synthetic: 93.7-98.3% accuracy on copy tasks vs 3.3-69.4% for attention baselines
+  - LCSTS: ROUGE-1 35.0 vs 29.9 for attention baseline
+  - Dialogue: 61.2% top-1 accuracy vs 44.1% for RNNSearch
+- **Key Insight**: The model learns to coordinate copy/generate modes without explicit supervision. Copy mode dominates when reproducing input segments, generate mode for novel words.
+- **Relevance**: Demonstrates that explicit copy machinery significantly outperforms general attention. The shared softmax competition is a natural way to model the copy decision but raises calibration questions — is the probability mass allocation between modes well-calibrated?
+
+### 3. Get To The Point: Pointer-Generator Networks (See et al., 2017)
+- **arXiv**: 1704.04368
+- **Key Contribution**: Hybrid pointer-generator with explicit generation probability p_gen ∈ [0,1] that acts as a soft switch between generating from vocabulary and copying from source. Added coverage mechanism to prevent repetition.
+- **Methodology**:
+  - p_gen = σ(w_h*^T h*_t + w_s^T s_t + w_x^T x_t + b_ptr) — learned scalar gate
+  - Final distribution: P(w) = p_gen * P_vocab(w) + (1-p_gen) * Σ a_i^t (for source words)
+  - Coverage vector c^t = Σ a^t&#39; accumulated attention; penalized for overlap
+  - Very few extra params: pointer adds only 1153 params to 21.5M baseline
+- **Datasets**: CNN/Daily Mail (287K training pairs, articles ~781 tokens, summaries ~56 tokens)
+- **Results**: ROUGE-1/2/L: 39.53/17.28/36.38 (with coverage), vs 31.33/11.81/28.83 baseline
+- **Key Insight**: The explicit p_gen switch is a **dedicated copy decision mechanism** embedded within a larger model. The paper shows this is remarkably effective with minimal parameter overhead. However, p_gen is computed from the same representations used for generation — it is NOT independently specialized.
+- **Relevance**: Most directly relevant to our hypothesis. The p_gen mechanism is essentially a &#34;copy decision module&#34; but it shares all representations with the generator. Our hypothesis proposes that a separately trained, specialized model for this decision would be more calibrated.
+
+### 4. Pointer Sentinel Mixture Models (Merity et al., 2016)
+- **arXiv**: 1609.07843
+- **Key Contribution**: Mixture model for language modeling that combines softmax vocabulary with pointer network, using a **sentinel** mechanism to determine when to use each component.
+- **Methodology**:
+  - Query q = tanh(W h_{N-1} + b) projected from hidden state
+  - Pointer attention: z_i = q^T h_i over window of L recent hidden states
+  - Sentinel: additional learnable vector s; gate g = softmax([z; q^T s]) at last position
+  - p(y) = g * p_vocab(y) + (1-g) * p_ptr(y)
+  - Gate g is determined by how well the sentinel competes with actual pointer targets
+- **Datasets**: Penn Treebank (929K tokens), WikiText-2 (2M tokens), WikiText-103 (103M tokens)
+- **Results**: PTB perplexity 70.9 (SOTA at the time), with fewer parameters than standard LSTM
+- **Key Insight**: The sentinel acts as a **specialized gating mechanism** that decides copy vs. generate by competing directly with pointer candidates. This is closer to a specialized copy-decision mechanism than p_gen. The sentinel&#39;s effectiveness comes from having context about both the pointer window and the RNN state.
+- **Relevance**: Demonstrates that integrating the gating decision directly into the pointer mechanism (rather than computing it from separate signals) leads to better decisions. Supports the idea that the copy decision benefits from specialized treatment.
+
+### 5. Pointing the Unknown Words (Gulcehre et al., 2016)
+- **arXiv**: 1603.08148
+- **Key Contribution**: Uses two softmax layers — one for word location in source, one for shortlist vocabulary — with an MLP-based switching network to decide which to use at each timestep.
+- **Methodology**: Switching network conditioned on context decides pointer vs. vocabulary softmax. Applied to NMT and summarization.
+- **Datasets**: Europarl En-Fr (NMT), Gigaword (summarization)
+- **Relevance**: One of the earliest approaches with an explicit switching mechanism for the copy decision. Unlike See et al.&#39;s mixture approach, the switch is more binary. Demonstrates that the switching decision itself needs careful modeling.
+
+### 6. On Calibration of Modern Neural Networks (Guo et al., 2017)
+- **arXiv**: 1706.04599
+- **Key Contribution**: Shows modern deep networks are **poorly calibrated** — they are overconfident. Temperature scaling (single-parameter Platt scaling) is surprisingly effective at recalibrating.
+- **Methodology**: Expected Calibration Error (ECE) metric. Reliability diagrams. Post-hoc calibration methods: temperature scaling, Platt scaling, histogram binning.
+- **Key Finding**: Depth, width, weight decay, and batch normalization all affect calibration. Larger/deeper models tend to be less calibrated despite higher accuracy.
+- **Relevance**: **Critical** for our hypothesis. If general large models are poorly calibrated, their copy-or-generate decisions (the p_gen values) are likely also poorly calibrated. A small, specialized model trained specifically for this decision might naturally be better calibrated because: (a) simpler models tend to be better calibrated, and (b) task-specific training directly optimizes the relevant decision boundary.
+
+### 7. Attention Is All You Need (Vaswani et al., 2017)
+- **arXiv**: 1706.03762
+- **Key Contribution**: The Transformer architecture using self-attention, which is the basis for the &#34;small Transformer&#34; in our hypothesis.
+- **Relevance**: The specialized copy-decision model would likely be a small Transformer. Understanding the architecture is essential for the experimental design.
+
+### 8. Transformer-XL (Dai et al., 2019)
+- **arXiv**: 1901.02860
+- **Key Contribution**: Segment-level recurrence for Transformers, enabling longer context. Achieves 18.3 perplexity on WikiText-103.
+- **Relevance**: Shows that Transformer architectures can be adapted for language modeling with long contexts, relevant as a baseline general model.
+
+---
+
+## Common Methodologies
+
+### Copy Decision Mechanisms (ordered by specialization level)
+1. **Implicit (no explicit copy)**: Standard seq2seq with attention — copy behavior emerges implicitly through attention weights but is not explicitly modeled
+2. **Shared softmax competition** (CopyNet): Generate and copy modes compete through a single normalization, no explicit gate
+3. **Explicit gate from shared representations** (Pointer-Generator): p_gen computed from the same encoder/decoder states used for generation
+4. **Sentinel-based gate** (Pointer Sentinel): Gate determined by pointer mechanism itself through a learnable sentinel competing with pointer targets
+5. **MLP switching network** (Gulcehre et al.): Separate network makes the copy/generate decision
+6. **Fully specialized model** (Our hypothesis): A separately trained small Transformer that takes encoder states as input and outputs copy decisions + pointer locations
+
+### The Calibration Gap
+No existing work directly measures the **calibration** of copy decisions. Papers report:
+- Accuracy (exact match)
+- ROUGE scores (overlap-based)
+- Perplexity (probabilistic, but for overall generation)
+
+None evaluate whether p_gen or the copy/generate mixture weights are well-calibrated probability estimates. This is a significant gap.
+
+---
+
+## Standard Baselines
+1. **Seq2seq + Attention** (Bahdanau et al., 2014): No copy mechanism
+2. **Pointer Network** (Vinyals et al., 2015): Copy only, no generation
+3. **CopyNet** (Gu et al., 2016): Shared softmax generate/copy
+4. **Pointer-Generator** (See et al., 2017): Explicit p_gen gate
+5. **Pointer Sentinel** (Merity et al., 2016): Sentinel-gated mixture
+
+## Evaluation Metrics
+- **Copy Decision Accuracy**: Whether the model correctly decides to copy vs. generate (binary classification metrics: accuracy, precision, recall, F1)
+- **Copy Location Accuracy**: When copying, whether it points to the correct source position
+- **Calibration Metrics**: Expected Calibration Error (ECE), reliability diagrams, Brier score — applied to the copy decision probability
+- **Task-level Metrics**: ROUGE (summarization), perplexity (language modeling), BLEU (translation)
+
+## Datasets in the Literature
+- **CNN/Daily Mail**: Summarization, 287K pairs (See et al., 2017)
+- **LCSTS**: Chinese summarization, 2.4M pairs (Gu et al., 2016)
+- **Gigaword**: Headline generation/summarization (Gulcehre et al., 2016)
+- **Penn Treebank**: Language modeling, 929K tokens (Merity et al., 2016)
+- **WikiText-2/103**: Language modeling, 2M/103M tokens (Merity et al., 2016)
+- **Synthetic pattern tasks**: For controlled evaluation of copying (Gu et al., 2016)
+- **XSum**: Extreme summarization (Narayan et al., 2018) — highly abstractive
+
+---
+
+## Gaps and Opportunities
+
+1. **No calibration analysis of copy decisions**: Existing work evaluates task-level performance but never asks &#34;are the copy probabilities well-calibrated?&#34;
+2. **Copy mechanism is always embedded**: In all existing work, the copy decision module shares representations and is trained jointly with the full model. No work has explored training a separate, specialized model.
+3. **Size vs. specialization tradeoff unexplored**: Can a small model focused solely on copy decisions match or beat a large general model&#39;s implicit copy behavior?
+4. **Calibration methods not applied to copy decisions**: Temperature scaling and other calibration techniques from Guo et al. (2017) have never been applied to the p_gen gate.
+
+---
+
+## Recommendations for Our Experiment
+
+### Recommended Datasets
+1. **CNN/Daily Mail** (primary): Well-established benchmark for pointer-generator evaluation. Has clear copy-vs-generate dynamics. Large enough for meaningful evaluation.
+2. **XSum**: More abstractive, providing a contrast where copy decisions are harder.
+3. **WikiText-103**: For language modeling evaluation with pointer sentinel.
+4. **Synthetic copy tasks** (à la CopyNet): For controlled ablation studies with known ground-truth copy decisions.
+
+### Recommended Baselines
+1. **Pointer-Generator** (See et al., 2017): The p_gen mechanism is the direct comparison target
+2. **CopyNet**: Shared softmax competition as an alternative copy decision mechanism
+3. **Standard Transformer LM with copy head**: A general Transformer that includes a copy head but is trained end-to-end for the full task
+4. **Specialized small Transformer** (our model): Trained specifically to predict copy decisions given encoder/decoder states
+
+### Recommended Metrics
+1. **ECE (Expected Calibration Error)** on copy decisions: Primary metric
+2. **Reliability diagrams** for copy probability
+3. **Brier score** for copy decisions
+4. **Copy decision accuracy** (precision/recall/F1)
+5. **Task-level performance** (ROUGE, perplexity) to ensure specialization doesn&#39;t hurt overall quality
+
+### Methodological Considerations
+- Extract p_gen values from a trained Pointer-Generator as ground truth for copy decisions
+- Train the specialized small Transformer on these extracted copy decision labels
+- Compare calibration of both models&#39; copy probabilities
+- Use temperature scaling as a simple calibration baseline to see if post-hoc calibration of p_gen closes the gap
+- Control for model size: compare specialized small model vs. same-sized general model
+
+
+════════════════════════════════════════════════════════════════════════════════
+                          PAPER REQUIREMENTS
+════════════════════════════════════════════════════════════════════════════════
+
+Generate a complete academic paper with the following structure:
+
+1. TITLE
+   - Clear, specific, informative
+   - Should convey main finding or contribution
+
+2. AUTHOR
+   - Use this exact author line in the \author{} block: Ari Holtzman and NeuriCo
+
+3. ABSTRACT (150-250 words)
+   - Problem statement
+   - Approach
+   - Key results
+   - Significance
+
+4. INTRODUCTION
+   - Research problem and motivation
+   - Gap in existing work
+   - Our contribution (be specific)
+   - Paper organization
+
+5. RELATED WORK
+   - Organized by theme/approach
+   - Position our work relative to prior work
+   - Cite papers from literature review
+
+6. METHODOLOGY
+   - Clear description of approach
+   - Experimental setup
+   - Datasets used
+   - Evaluation metrics
+   - Baselines
+
+7. RESULTS
+   - Present results with tables and figures
+   - Statistical analysis
+   - Comparison to baselines
+   - Ablation studies (if applicable)
+
+8. DISCUSSION
+   - Interpretation of results
+   - Limitations
+   - Broader implications
+
+9. CONCLUSION
+   - Summary of contributions
+   - Key findings
+   - Future work
+
+10. REFERENCES
+   - BibTeX format
+   - All cited papers
+
+════════════════════════════════════════════════════════════════════════════════
+                          OUTPUT FORMAT
+════════════════════════════════════════════════════════════════════════════════
+
+Create a MODULAR LaTeX project with the following directory structure:
+
+paper_draft/
+├── main.tex              # Main file that imports all sections
+├── references.bib        # BibTeX references
+├── sections/
+│   ├── abstract.tex      # Abstract content
+│   ├── introduction.tex  # Introduction section
+│   ├── related_work.tex  # Related work section
+│   ├── methodology.tex   # Methodology section
+│   ├── results.tex       # Results section
+│   ├── discussion.tex    # Discussion section
+│   └── conclusion.tex    # Conclusion section
+├── figures/              # Directory for any generated figures
+├── tables/               # Directory for complex standalone tables
+└── appendix/             # Directory for appendix sections (if needed)
+
+INSTRUCTIONS:
+1. First, create the directory structure above (mkdir -p paper_draft/sections paper_draft/figures paper_draft/tables paper_draft/appendix)
+2. Write main.tex using the EXACT preamble for NEURIPS:
+
+   \documentclass{article}
+   \usepackage[final]{neurips_2025}  % NEURIPS style (neurips_2025.sty is in paper_draft/)
+   \usepackage[hidelinks]{hyperref}  % REQUIRED: clickable links
+   \usepackage{booktabs}  % REQUIRED: professional tables
+   \usepackage{graphicx}
+   \usepackage{amsmath,amssymb}
+
+   % Import command files
+   \input{commands/math}
+   \input{commands/general}
+   \input{commands/macros}
+
+   % Use this bibliography style:
+   \bibliographystyle{plainnat}
+
+   \author{Ari Holtzman and NeuriCo}
+
+   - Use \input{sections/...} to include each section
+   - Use \bibliography{references} for references
+3. Write each section file with COMPLETE content (no placeholders)
+4. Each section file should include its \section{} command
+5. Write references.bib with all citations in BibTeX format
+6. After writing all files, compile the paper:
+   cd paper_draft && pdflatex -interaction=nonstopmode main.tex && bibtex main && pdflatex -interaction=nonstopmode main.tex && pdflatex -interaction=nonstopmode main.tex
+
+This modular structure allows humans to easily:
+- Edit individual sections without navigating a large file
+- Track changes per section
+- Reuse sections across different paper versions
+
+════════════════════════════════════════════════════════════════════════════════
+                          QUALITY REQUIREMENTS
+════════════════════════════════════════════════════════════════════════════════
+
+- Academic tone throughout
+- All claims must be supported by data from the experiment report
+- Proper citations using \cite{} commands
+- Clear figures and tables with proper captions
+- NO placeholder text - every section must have real content
+- The paper MUST compile without errors
+- If compilation fails, debug and fix the LaTeX errors
+
+════════════════════════════════════════════════════════════════════════════════
+                          LAB WRITING STYLE
+════════════════════════════════════════════════════════════════════════════════
+
+Follow these lab-specific conventions to match our paper style:
+
+1. LANGUAGE STYLE:
+   - Use active voice: "We propose", "We examine", "We focus on"
+   - Be direct and confident: "Our main question is...", "We hypothesize that..."
+   - State things clearly and simply - prefer plain language over jargon
+   - Use bold questions as paragraph organizers: {\bf what is X?}
+   - Include specific quantitative claims: "8.97% over baseline"
+   - Avoid fancy wording: "utilize" → "use", "facilitate" → "help"
+
+2. INTRODUCTION STRUCTURE:
+   - Engaging hook (get to the point quickly)
+   - Problem importance
+   - Gap identification
+   - Your approach with method figure reference
+   - Quantitative preview of results
+   - Contribution bullets (3-4 items, action verbs)
+
+3. CONTRIBUTION LISTS:
+   \begin{itemize}[leftmargin=*,itemsep=0pt,topsep=0pt]
+       \item We propose...
+       \item We conduct...
+       \item We complement...
+   \end{itemize}
+
+4. MODULAR COMMANDS STRUCTURE:
+   Command templates are pre-copied to paper_draft/commands/:
+   - math.tex: Math notation macros
+   - general.tex: Formatting macros
+   - macros.tex: Project-specific term definitions (customize this for your paper)
+
+   In main.tex, include:
+   \input{commands/math}
+   \input{commands/general}
+   \input{commands/macros}
+
+5. REFERENCE CONVENTIONS:
+   Use reference macros from math.tex:
+   - \figref{fig:name} for "figure 1" (lowercase, in-sentence)
+   - \Figref{fig:name} for "Figure 1" (capitalized, start of sentence)
+   - \secref{sec:name} for "section 2"
+
+6. TEXT FORMATTING:
+   - Use \para{Header text} for bold paragraph headers
+   - Define method/dataset names with \textsc and \xspace:
+     \newcommand{\methodname}{\textsc{MethodName}\xspace}
+
+7. TABLE FORMATTING:
+   - Use booktabs package (no vertical lines)
+   - Use \resizebox{\textwidth}{!}{...} for wide tables
+   - Use @{} to remove padding at table edges
+   - Use \cmidrule(lr){x-y} for sub-headers
+   - Use \textsc{} for dataset/method names in headers
+   - Bold best results with {\bf ...}
+
+8. FIGURE FORMATTING:
+   - Use 0.32\textwidth for 3-column subfigures
+   - Use 0.95\linewidth for full-width figures
+   - Use \input{figures/legend} for shared legends
+   - Write self-contained captions explaining key observations
+
+9. RESULTS PRESENTATION:
+   - Define \increase and \decrease for colored arrows (green up, red down)
+   - Bold best results in tables
+   - Report confidence intervals when available
+
+10. ALGORITHM STYLING:
+    - Use algpseudocode with [noend]
+    - Use \triangleright for comments
+
+11. HYPERLINKS (REQUIRED):
+    - Always use \usepackage[hidelinks]{hyperref} or with colored links
+    - All citations, section refs, figure refs, table refs must be clickable
+    - This is essential for reader navigation
+
+════════════════════════════════════════════════════════════════════════════════
+                          WORKFLOW: REVIEW AND REFLECT
+════════════════════════════════════════════════════════════════════════════════
+
+Before calling finish, you MUST complete these review steps:
+
+1. REVIEW RESOURCES (at the start):
+   - Read .claude/skills/paper-writer/SKILL.md for detailed guidance
+   - Study templates/paper_writing/lab_style_guide.md for style conventions
+   - Browse paper_examples/ for formatting and language patterns
+
+2. SELF-REFLECTION (before finishing):
+   After writing all sections, review your work against these criteria:
+
+   LANGUAGE CHECK:
+   - [ ] Is the writing clear and jargon-free?
+   - [ ] Are claims specific with quantitative support?
+   - [ ] Is active voice used throughout?
+
+   FORMATTING CHECK:
+   - [ ] Does main.tex include \input{commands/math}, \input{commands/general}, \input{commands/macros}?
+   - [ ] Is hyperref package included for clickable references?
+   - [ ] Do tables use booktabs (no vertical lines)?
+   - [ ] Are best results bolded in tables?
+   - [ ] Are figures/tables properly captioned?
+
+   STRUCTURE CHECK:
+   - [ ] Does introduction follow: hook → importance → gap → approach → preview → contributions?
+   - [ ] Are contribution bullets specific with action verbs?
+   - [ ] Does the paper compile without errors?
+
+3. FIX ISSUES:
+   - Address any issues found in the self-reflection
+   - Re-compile and verify the PDF looks correct
+
+Only after completing this review should you consider the paper finished.

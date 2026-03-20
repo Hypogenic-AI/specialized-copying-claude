@@ -1,0 +1,62 @@
+\section{Methodology}
+\label{sec:method}
+
+\subsection{Synthetic Copy Task}
+\label{sec:data}
+
+We design a synthetic sequence-to-sequence task with controllable ground-truth copy labels. This enables precise measurement of calibration without the noise inherent in real-world data, where the ``correct'' copy decision is ambiguous.
+
+\para{Task structure.} Each example consists of a source sequence of 40 tokens and a target sequence of 20 tokens, drawn from a vocabulary of 500 tokens. For each target position, the ground-truth label indicates whether the token should be copied from the source (and from which position) or generated independently.
+
+\para{Copy decision rule.} The probability of copying at each output position depends on three factors: (1) \emph{token type}---tokens 0--249 are ``entity-like'' with a 70\% base copy tendency, while tokens 250--499 are ``function-like'' with 30\%; (2) \emph{position}---tokens near the edges of the source sequence have a 60\% copy tendency versus 40\% for middle positions; and (3) \emph{local repetition}---repeated nearby tokens increase copy tendency. We add Gaussian noise ($\sigma = 0.1$) to create a learnable but non-trivial decision boundary. This design produces a balanced dataset with approximately 46.5\% copy tokens.
+
+\para{Dataset splits.} We generate 10,000 training, 2,000 validation, and 2,000 test sequences using different random seeds per split, ensuring no overlap.
+
+\subsection{Model Architectures}
+\label{sec:models}
+
+We compare two architectures trained on the same task, illustrated schematically in \Figref{fig:reliability}.
+
+\para{Joint pointer-generator (\joint).} A Transformer encoder-decoder (824K parameters) with a pointer-generator mechanism following \citet{see2017get}, adapted to the Transformer architecture. The model has embedding dimension $d = 128$, 2 layers, 4 attention heads, and feed-forward dimension $d_{\text{ff}} = 256$ in both encoder and decoder. The generation probability is computed as:
+\begin{equation}
+    \pgen = \sigmoid(\vw_h^\top \vh_t^* + \vw_s^\top \vs_t + \vw_x^\top \vx_t + b)
+    \label{eq:pgen}
+\end{equation}
+where $\vh_t^*$ is the context vector, $\vs_t$ is the decoder state, and $\vx_t$ is the input embedding at step $t$. The final distribution combines generation and copy:
+\begin{equation}
+    P(w) = \pgen \cdot P_{\text{vocab}}(w) + (1 - \pgen) \sum_{i: x_i = w} \alpha_i^t
+    \label{eq:final_dist}
+\end{equation}
+where $\alpha_i^t$ are pointer attention weights over source positions. The model is trained end-to-end on generation loss, copy decision loss, and pointer loss jointly.
+
+\para{Specialized copy-decider (\specialized).} A smaller Transformer (472K parameters) that takes encoder and decoder representations from the \emph{trained} joint model and predicts only copy decisions. It consists of input projections for encoder/decoder representations, 2 Transformer decoder layers (cross-attending to encoder outputs), a copy decision head (MLP: $128 \to 64 \to 1$ with sigmoid), and pointer attention via query/key projections. The encoder representations are frozen during training; the specialized model optimizes only the copy decision and pointer losses.
+
+\para{Temperature-scaled baseline (\tempscaled).} We apply temperature scaling~\cite{guo2017calibration} to the joint model's $\pgen$ logits. The optimal temperature $T$ is found by minimizing negative log-likelihood on the validation set. The calibrated probability is $\pgen' = \sigmoid(z / T)$ where $z$ is the pre-sigmoid logit.
+
+\subsection{Training Details}
+\label{sec:training}
+
+Both models use AdamW optimization with learning rate $3 \times 10^{-4}$, cosine annealing schedule, batch size 128, gradient clipping at 1.0, and dropout of 0.1. We train for 30 epochs with early stopping based on validation loss. All experiments run on a single NVIDIA RTX A6000 GPU.
+
+\subsection{Evaluation Metrics}
+\label{sec:metrics}
+
+We evaluate calibration and accuracy of copy probability estimates:
+
+\para{Expected calibration error (ECE).} We partition predictions into $M = 15$ equal-width bins by predicted probability and compute:
+\begin{equation}
+    \text{ECE} = \sum_{m=1}^{M} \frac{|B_m|}{n} \left| \text{acc}(B_m) - \text{conf}(B_m) \right|
+    \label{eq:ece}
+\end{equation}
+where $B_m$ is the set of predictions in bin $m$, $\text{acc}(B_m)$ is the observed copy frequency, and $\text{conf}(B_m)$ is the mean predicted probability.
+
+\para{Maximum calibration error (MCE).} The worst-case bin-level calibration gap: $\text{MCE} = \max_m \left| \text{acc}(B_m) - \text{conf}(B_m) \right|$.
+
+\para{Brier score.} The mean squared error of probability estimates: $\text{Brier} = \frac{1}{n} \sum_i (p_i - y_i)^2$, where $p_i$ is the predicted copy probability and $y_i \in \{0, 1\}$ is the ground-truth label. The Brier score decomposes into calibration and refinement (sharpness) components.
+
+\para{Accuracy and F1.} Binary classification metrics for the copy decision at threshold 0.5.
+
+\subsection{Experimental Protocol}
+\label{sec:protocol}
+
+We run all experiments with 5 random seeds (42, 123, 456, 789, 1024), setting seeds for Python, NumPy, PyTorch, and CUDA. We report mean $\pm$ standard deviation across seeds. Statistical significance is assessed via paired $t$-tests ($\alpha = 0.05$) and Cohen's $d$ for effect size. We also conduct a model size ablation with three configurations: tiny (1 layer, $d = 64$), small (2 layers, $d = 128$), and medium (4 layers, $d = 256$).

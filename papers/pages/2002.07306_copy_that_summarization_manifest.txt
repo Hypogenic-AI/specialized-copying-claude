@@ -1,0 +1,14 @@
+PDF: papers/2002.07306_copy_that_summarization.pdf
+Total pages: 9
+Pages per chunk: 1
+
+Chunks:
+  2002.07306_copy_that_summarization_chunk_001.pdf: page 1
+  2002.07306_copy_that_summarization_chunk_002.pdf: page 2
+  2002.07306_copy_that_summarization_chunk_003.pdf: page 3
+  2002.07306_copy_that_summarization_chunk_004.pdf: page 4
+  2002.07306_copy_that_summarization_chunk_005.pdf: page 5
+  2002.07306_copy_that_summarization_chunk_006.pdf: page 6
+  2002.07306_copy_that_summarization_chunk_007.pdf: page 7
+  2002.07306_copy_that_summarization_chunk_008.pdf: page 8
+  2002.07306_copy_that_summarization_chunk_009.pdf: page 9
