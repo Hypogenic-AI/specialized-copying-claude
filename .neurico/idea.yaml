@@ -1,0 +1,23 @@
+idea:
+  title: Is copying more calibrated if it's specialized?
+  domain: machine_learning
+  hypothesis: 'Training a small Transformer specifically to decide when to copy and
+    from where will result in more accurate copying decisions than using a general
+    language model trained for the same task.
+
+    '
+  background:
+    description: 'If we train a small Transformer to simply decide when to copy and
+      from where, will it be more accurate at deciding than training a language model
+      and using it to make the same copying decisions?
+
+      '
+  metadata:
+    author: Ari Holtzman
+    source: IdeaHub
+    source_url: https://hypogenic.ai/ideahub/idea/1CZpEFT3Gp2PA8W3QGlk
+    idea_id: is_copying_more_calibrated_if__20260320_145214_83746964
+    created_at: '2026-03-20T14:52:14.907781'
+    status: submitted
+    github_repo_name: specialized-copying-claude
+    github_repo_url: https://github.com/Hypogenic-AI/specialized-copying-claude
